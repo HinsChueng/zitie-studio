@@ -1,0 +1,9 @@
+# 依赖与构建产物
+node_modules/
+frontend/dist/
+__pycache__/
+*.pyc
+.venv/
+
+# 运行时生成的字体扫描缓存（删掉会自动重建）
+backend/data/fontcache.json
