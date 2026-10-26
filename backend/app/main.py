@@ -16,7 +16,7 @@ from fastapi.staticfiles import StaticFiles
 from PIL import Image, ImageDraw, ImageFont
 
 from . import charsets, fonts
-from .layout import FULL_PUNCT
+from .layout import ALL_PUNCT, TraditionalUnavailable, traditional_available
 from .render import Sheet, missing_report, volume_text
 from .schemas import ExportRequest, PreviewRequest, PreviewResponse, SheetParams
 
@@ -49,6 +49,14 @@ def preview_params(params: SheetParams) -> SheetParams:
     return params.model_copy(update={"dpi": min(params.dpi, 150)})
 
 
+def build_sheet(params: SheetParams) -> Sheet:
+    """构造 Sheet；转繁体缺依赖时给一句人能看懂的报错，而不是静默出简体验"""
+    try:
+        return Sheet(params)
+    except TraditionalUnavailable as exc:
+        raise HTTPException(400, str(exc)) from exc
+
+
 @app.get("/api/health")
 def health() -> dict:
     return {"ok": True}
@@ -71,6 +79,8 @@ def meta() -> dict:
             {"id": "B5", "name": "B5  176×250mm"},
         ],
         "defaults": defaults,
+        # 前端据此决定「转繁体」是否可用，避免开关点了没反应
+        "capabilities": {"traditional": traditional_available()},
     }
 
 
@@ -138,7 +148,7 @@ def charset(key: str) -> dict:
 @app.post("/api/preview", response_model=PreviewResponse)
 def preview(req: PreviewRequest) -> PreviewResponse:
     params = preview_params(req.params) if not req.full else req.params
-    sheet = Sheet(params)
+    sheet = build_sheet(params)
     if not sheet.pages:
         raise HTTPException(400, "没有可渲染的内容")
 
@@ -151,7 +161,7 @@ def preview(req: PreviewRequest) -> PreviewResponse:
         warnings.append(f"字体缺少 {len(missing)} 个字形，这些字不会显示：{''.join(missing[:20])}"
                         + ("…" if len(missing) > 20 else ""))
     # 标点借用备用字体是常态（不少书法字库不含标点），不必打扰用户
-    borrowed_words = [c for c in borrowed if c not in FULL_PUNCT]
+    borrowed_words = [c for c in borrowed if c not in ALL_PUNCT]
     if borrowed_words:
         warnings.append(f"当前字库没有 {len(borrowed_words)} 个字，已用备用字体补上："
                         f"{''.join(borrowed_words[:20])}" + ("…" if len(borrowed_words) > 20 else ""))
@@ -179,7 +189,7 @@ def export(req: ExportRequest) -> Response:
     base = safe_name(params.title or params.text[:12])
 
     if req.split_size <= 0:
-        sheet = Sheet(params)
+        sheet = build_sheet(params)
         if len(sheet.pages) > 200:
             raise HTTPException(400, f"共 {len(sheet.pages)} 页，超过单次导出上限 200 页，请分册导出")
         with tempfile.TemporaryDirectory() as tmp:
@@ -201,7 +211,7 @@ def export(req: ExportRequest) -> Response:
                     "text": chunk,
                     "title": f"{params.title} 第{i}册".strip(),
                 })
-                sheet = Sheet(sub)
+                sheet = build_sheet(sub)
                 out = sheet.export_pdf(Path(tmp) / f"v{i}.pdf")
                 zf.write(out, f"{base}_第{i}册.pdf")
     buf.seek(0)

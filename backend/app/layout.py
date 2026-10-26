@@ -14,35 +14,63 @@ NO_START = set("。，、；：？！）］｝〉》」』】”’…—·％�
 NO_END = set("（［｛〈《「『【“‘([{<")
 
 FULL_PUNCT = set("，。、；：？！“”‘’（）【】《》〈〉「」『』…—·～％‰")
+# 半角标点：用户粘贴的英文标点，保留与否跟着 keep_punct 走
+HALF_PUNCT = set(",.;:?!")
+ALL_PUNCT = FULL_PUNCT | HALF_PUNCT
 # 适合断行的句读标点
 PUNCT_BREAK = set("。！？，、；：")
 CJK = re.compile(r"[\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff]")
 
+# 简繁转换依赖 zhconv；缺了必须报错，不能静默返回原文
+try:
+    from zhconv import convert as _zh_convert
+except ImportError:                       # pragma: no cover - 取决于部署环境
+    _zh_convert = None
 
-def _to_traditional(text: str) -> str:
-    try:
-        from zhconv import convert
 
-        return convert(text, "zh-hant")
-    except Exception:  # 没装 zhconv 时降级为原文
+class TraditionalUnavailable(RuntimeError):
+    """没装 zhconv，转繁体不可用"""
+
+
+def traditional_available() -> bool:
+    return _zh_convert is not None
+
+
+# zhconv 是逐字表 + 有限词组表，量词「里」会被误转成「裏」（公里 → 公裏）
+_UNIT_LI = re.compile(r"([〇一二三四五六七八九十百千萬万億亿零两兩0-9])裏")
+_LI_PHRASES = (("公裏", "公里"), ("華裏", "華里"), ("裏程", "里程"), ("裏弄", "里弄"))
+
+
+def _fix_unit_li(text: str) -> str:
+    text = _UNIT_LI.sub(r"\1里", text)
+    for wrong, right in _LI_PHRASES:
+        text = text.replace(wrong, right)
+    return text
+
+
+def to_traditional(text: str) -> str:
+    """简体 → 繁体。没有 zhconv 时抛异常，由接口层转成明确报错。"""
+    if not text:
         return text
+    if _zh_convert is None:
+        raise TraditionalUnavailable("转繁体需要 zhconv，请先执行 pip install zhconv")
+    return _fix_unit_li(_zh_convert(text, "zh-hant"))
 
 
 def normalize(text: str, keep_punct: bool = True, traditional: bool = False) -> str:
     """统一换行符，按需保留标点与数字，其余字符丢弃。"""
     if traditional:
-        text = _to_traditional(text)
+        text = to_traditional(text)
     text = text.replace("\r\n", "\n").replace("\r", "\n")
 
     out: list[str] = []
     for ch in text:
         if ch == "\n":
-            out.append("\n")
-        elif CJK.match(ch) or ch in FULL_PUNCT:
             out.append(ch)
-        elif ch.isalnum():          # 数字、英文字母保留，便于练数字或英文
-            out.append(ch)
-        elif keep_punct and ch in ",.;:?!":
+        elif ch in ALL_PUNCT:       # 全角、半角标点都受 keep_punct 控制
+            if keep_punct:
+                out.append(ch)
+        elif CJK.match(ch) or ch.isalnum():     # 数字、英文字母保留，便于练数字或英文
             out.append(ch)
         # 其余（空白、emoji、其他符号）丢弃
     return "".join(out)
@@ -91,36 +119,31 @@ def _split_after_punct(text: str) -> list[str]:
 
 
 def _hard_wrap(paragraph: str, cols: int, rule: bool = True) -> list[str]:
-    lines: list[str] = []
-    cur: list[str] = []
+    """按固定格数切行，rule=True 时执行避头尾禁则。
+
+    避头尾是「先把行切出来，再把不合规的断点挪一格」，不是「等标点自己撞上行首」：
+      避头：下一行的第一个字若是标点/收尾符号，断点前移一格，让标点留在上一行末；
+      避尾：本行最后一个字若是开引号/左括号，把它挪到下一行，避免悬在行尾。
+    两处调整都只会让行变短，不会超出 cols，格子是固定的。
+    """
     total = len(paragraph)
+    lines: list[str] = []
+    pos = 0
 
-    for i, ch in enumerate(paragraph):
-        cur.append(ch)
-        if len(cur) < cols:
-            continue
+    while pos < total:
+        end = min(pos + cols, total)
+        if rule and end < total:
+            # 避头：断点后是标点就把断点往前挪；连续标点（「？！」「……」）一并处理
+            while end - 1 > pos and paragraph[end] in NO_START:
+                end -= 1
+            # 避尾：行末悬着开引号 / 左括号，推到下一行
+            while end - 1 > pos and paragraph[end - 1] in NO_END:
+                end -= 1
+        if end <= pos:                              # cols=1 之类的极端情况
+            end = pos + 1
+        lines.append(paragraph[pos:end])
+        pos = end
 
-        # 已经是最后一个字，不必为禁则腾位置，直接收行
-        if i == total - 1:
-            lines.append("".join(cur))
-            cur = []
-        elif rule and ch in NO_START and len(cur) > 1:
-            # 标点被顶到行首：把标点和它前一个字一起挪到下一行
-            punct = cur.pop()
-            carry = cur.pop()
-            lines.append("".join(cur))
-            cur = [carry, punct]
-        elif rule and len(cur) > 1 and cur[-1] in NO_END:
-            # 行尾悬着开引号 / 左括号：一起挪下去
-            carry = cur.pop()
-            lines.append("".join(cur))
-            cur = [carry]
-        else:
-            lines.append("".join(cur))
-            cur = []
-
-    if cur:
-        lines.append("".join(cur))
     return lines
 
 
@@ -165,7 +188,7 @@ def compose_rows(p) -> list[list[Slot | None]]:
             # 单字重复练习：一行只练一个字；标点不进单字练习
             for line in lines:
                 for ch in line:
-                    if ch in FULL_PUNCT or ch in ",.;:?!":
+                    if ch in ALL_PUNCT:
                         continue
                     row = []
                     for i in range(cols):

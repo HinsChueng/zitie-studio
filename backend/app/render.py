@@ -15,7 +15,7 @@ from PIL import Image, ImageDraw, ImageFont
 from . import fonts
 from .glyphs import GlyphFactory, hex_to_rgb
 from .grid import draw_grid
-from .layout import Slot, compose_rows, paginate, FULL_PUNCT
+from .layout import Slot, compose_rows, paginate, to_traditional
 from .schemas import SheetParams
 
 PAGE_MM = {"A4": (210.0, 297.0), "A5": (148.0, 210.0), "B5": (176.0, 250.0)}
@@ -214,7 +214,13 @@ def missing_report(params: SheetParams) -> tuple[list[str], list[str]]:
     """返回 (谁都画不出来的字, 只有主字体画不出来的字)。
 
     第二个列表只用于提示“这几个字用了备用字体”，不算错误。
+    注意：转繁体后实际要画的是繁体字，所以检查也要按转换后的文本走，
+    否则「牀 / 頭 / 鄉」这些字缺字形时不会报警。
     """
+    title, text = params.title, params.text
+    if params.traditional:
+        title, text = to_traditional(title), to_traditional(text)
+
     primary = fonts.resolve(params.font_id)
     paths = fonts.chain(params.font_id) if params.font_fallback else [primary]
     primary_cmap = _cmap_of(primary)
@@ -224,7 +230,7 @@ def missing_report(params: SheetParams) -> tuple[list[str], list[str]]:
     missing: list[str] = []
     borrowed: list[str] = []
 
-    for ch in params.title + params.text:
+    for ch in title + text:
         if ch in seen or ch.isspace():
             continue
         seen.add(ch)

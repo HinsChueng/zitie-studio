@@ -7,7 +7,7 @@ import GridIcon from './components/GridIcon.vue'
 import CharPicker from './components/CharPicker.vue'
 import FontPicker from './components/FontPicker.vue'
 
-const meta = ref({ fonts: [], charsets: [], grids: [], page_sizes: [], defaults: {} })
+const meta = ref({ fonts: [], charsets: [], grids: [], page_sizes: [], defaults: {}, capabilities: {} })
 const params = reactive({})
 const state = reactive({
   image: '',
@@ -42,6 +42,8 @@ const isMixed = computed(() => params.mode === 'mixed')
 const isRotate = computed(() => params.mode === 'rotate')
 const textLen = computed(() => (params.text || '').replace(/\s/g, '').length)
 const currentFont = computed(() => meta.value.fonts.find(f => f.id === params.font_id) || null)
+// 后端没装 zhconv 时「转繁体」点了不会有任何变化，不如直接置灰并说明原因
+const canTraditional = computed(() => meta.value.capabilities?.traditional !== false)
 
 /* ---------------- 预览 ---------------- */
 let timer = null
@@ -385,8 +387,16 @@ onMounted(async () => {
         <div class="section-head"><h3>文本处理</h3></div>
         <Toggle v-model="params.keep_punct" label="保留标点" />
         <Toggle v-model="params.break_at_punct" label="按标点断句（诗句更整齐）" />
-        <Toggle v-model="params.traditional" label="转繁体" />
+        <Toggle
+          v-model="params.traditional"
+          label="转繁体（标题一起转）"
+          :disabled="!canTraditional"
+          hint="后端未安装 zhconv，转繁体不可用：pip install zhconv"
+        />
         <Toggle v-model="params.line_break_rule" label="避头尾禁则" />
+        <p v-if="!canTraditional" class="hint" style="margin:6px 0 0">
+          转繁体需要后端安装 zhconv（pip install zhconv），当前已禁用。
+        </p>
       </div>
     </aside>
 

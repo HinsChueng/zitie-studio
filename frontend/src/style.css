@@ -222,6 +222,10 @@ input[type="color"] {
 }
 .switch.on i { background: var(--accent); }
 .switch.on i::after { transform: translateX(14px); }
+.switch.off {
+  cursor: not-allowed;
+  opacity: .45;
+}
 
 /* ---------- 预览区 ---------- */
 .stage {

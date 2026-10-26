@@ -12,7 +12,7 @@ from pathlib import Path
 
 from PIL import Image, ImageChops, ImageDraw, ImageFilter, ImageFont
 
-from .layout import FULL_PUNCT
+from .layout import ALL_PUNCT
 
 
 def hex_to_rgb(value: str) -> tuple[int, int, int]:
@@ -123,7 +123,7 @@ class GlyphFactory:
 
     def render(self, ch: str, style: str) -> tuple[Image.Image, Image.Image] | None:
         """返回 (纯色层, 蒙版)，直接 page.paste(layer, pos, mask)"""
-        punct = ch in FULL_PUNCT or ch in ",.;:?!"
+        punct = ch in ALL_PUNCT
         key = (ch, style, punct)
         if key in self._styled:
             cached = self._styled[key]
